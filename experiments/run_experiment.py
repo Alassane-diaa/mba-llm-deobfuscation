@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import time
 from collections import Counter
@@ -9,6 +10,11 @@ from src.sampling import train_inputs, test_inputs, to_env
 from src.metrics import evaluate
 from src.providers import get_provider
 from src.methods.blackbox_methods import run_single, run_agent
+
+
+def target_seed(target, salt):
+    """Graine propre à chaque cible : deux expressions n'ont pas les mêmes entrées."""
+    return int(hashlib.sha256(f"{salt}|{target}".encode("utf-8")).hexdigest()[:8], 16)
 
 
 def summary(recs, path):
@@ -30,7 +36,8 @@ def summary(recs, path):
     print(f"Réussite par échantillons : {len(succ)}/{n} = {len(succ)/n:.1%}")
     print(f"Prouvées équivalentes (Z3) : {len(proven)}/{n} = {len(proven)/n:.1%}")
     print(f"Contre-exemples Z3 : {len(cex)} | timeouts Z3 : {len(timeouts)}")
-    print(f"Correspondance moyenne sur les tests : {tot_c/tot_t:.1%}" if tot_t else "")
+    if tot_t:
+        print(f"Correspondance moyenne sur les tests : {tot_c/tot_t:.1%}")
     print(f"Tours moyens : {sum(r.get('rounds', 0) for r in recs)/n:.2f}")
     if ratios:
         print(f"Qualité (taille candidat / cible, sur prouvées) : {sum(ratios)/len(ratios):.2f}")
@@ -76,14 +83,16 @@ def main():
                 n = nvars(target)
                 f = compile_expr(target, n, a.bits)
                 pairs = [(row, f(to_env(row, a.bits)))
-                         for row in train_inputs(n, a.bits, total=a.train)]
+                         for row in train_inputs(n, a.bits, total=a.train,
+                                                 seed=target_seed(target, "train"))]
 
                 if a.method == "single":
                     cand, rounds, hist, reason = run_single(ask, n, a.bits, pairs)
                 else:
                     cand, rounds, hist, reason = run_agent(ask, n, a.bits, pairs, a.rounds)
 
-                res = evaluate(cand, target, n, a.bits, test_inputs(n, a.bits), reason=reason)
+                test_rows = test_inputs(n, a.bits, seed=target_seed(target, "test"))
+                res = evaluate(cand, target, n, a.bits, test_rows, reason=reason)
                 rec.update(res, cand=cand, rounds=rounds, history=hist, reason=reason)
             except Exception as e:
                 rec.update(valid=False, success=False, proven=False, correct=0, total=0,
