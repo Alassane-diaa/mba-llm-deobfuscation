@@ -12,7 +12,7 @@ Rules:
 - Every arithmetic operation is modulo 2^width.
 - Bitwise operators act on the width-bit values.
 - The expression must match all examples.
-- Output ONLY the expression on one line, without labels, quotes, markdown, or explanation."""
+- OUTPUT ONLY THE EXPRESSION ON ONE LINE, WITHOUT LABELS, QUOTES, MARKDOWN, OR EXPLANATION."""
 
 ONE_SHOT = """
 
@@ -23,7 +23,7 @@ Examples (inputs and outputs as signed decimal):
 v0=3, v1=5 -> 8
 v0=-7, v1=2 -> -5
 Expected output:
-(v0 ^ v1) + 2 * (v0 & v1)"""
+v0 + v1"""
 
 SYSTEM = SYSTEM_BASE + ONE_SHOT
 
