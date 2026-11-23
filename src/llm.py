@@ -27,20 +27,28 @@ def _get_client():
     return _client
 
 
-def ask(prompt, system=None, retries=5):
+def ask(prompt, system=None, retries=5, max_tokens=None, cache_namespace=None):
     """Appelle Gemini. Cache disque par (modèle, réflexion, système, prompt)."""
+    cache_identity = f"{MODEL}|{THINKING}"
+    if cache_namespace:
+        cache_identity += f"|run={cache_namespace}"
+    if max_tokens is not None:
+        cache_identity += f"|max{max_tokens}"
     key = hashlib.sha256(
-        f"{MODEL}|{THINKING}\n{system}\n{prompt}".encode("utf-8")
+        f"{cache_identity}\n{system}\n{prompt}".encode("utf-8")
     ).hexdigest()
     cache_file = CACHE / f"{key}.json"
     if cache_file.exists():
         return json.loads(cache_file.read_text(encoding="utf-8"))["text"]
 
-    config = types.GenerateContentConfig(
-        temperature=0,
-        system_instruction=system,
-        thinking_config=types.ThinkingConfig(thinking_level=THINKING),
-    )
+    config_kwargs = {
+        "temperature": 0,
+        "system_instruction": system,
+        "thinking_config": types.ThinkingConfig(thinking_level=THINKING),
+    }
+    if max_tokens is not None:
+        config_kwargs["max_output_tokens"] = max_tokens
+    config = types.GenerateContentConfig(**config_kwargs)
 
     for attempt in range(retries):
         try:

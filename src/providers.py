@@ -23,14 +23,26 @@ PRESETS = {
 }
 
 
-def _gemini(model):
+def _gemini(model, output_mode="plain", max_output_tokens=None, persona="none", shots=0,
+            cache_namespace=None):
     if model:
         raise SystemExit("Pour gemini, le modèle se règle dans .env (GEMINI_MODEL).")
     from src import llm  # module existant, non modifié
-    return llm.ask, f"gemini|{llm.MODEL}|{llm.THINKING}"
+    tag = f"gemini|{llm.MODEL}|{llm.THINKING}|output={output_mode}"
+    tag += f"|persona={persona}|shots={shots}"
+    if output_mode == "json":
+        tag += f"|max{max_output_tokens}"
+
+    def ask(prompt, system=None, retries=5):
+        return llm.ask(prompt, system=system, retries=retries,
+                       max_tokens=max_output_tokens if output_mode == "json" else None,
+                       cache_namespace=cache_namespace)
+
+    return ask, tag
 
 
-def _openai_compat(name, model):
+def _openai_compat(name, model, output_mode="plain", max_output_tokens=None, persona="none",
+                   shots=0, cache_namespace=None):
     from openai import OpenAI, APIStatusError
 
     base, key_env, fixed_key = PRESETS[name]
@@ -41,10 +53,14 @@ def _openai_compat(name, model):
         raise SystemExit(f"Config incomplète pour {name} : URL, clé ou modèle manquant.")
 
     client = OpenAI(base_url=base, api_key=api_key, timeout=300)
-    tag = f"{name}|{base}|{model}|max{MAX_OUTPUT_TOKENS}"
+    effective_max_tokens = max_output_tokens if output_mode == "json" else MAX_OUTPUT_TOKENS
+    tag = f"{name}|{base}|{model}|max{effective_max_tokens}|output={output_mode}"
+    tag += f"|persona={persona}|shots={shots}"
 
     def ask(prompt, system=None, retries=5):
-        key = hashlib.sha256(f"{tag}\n{system}\n{prompt}".encode("utf-8")).hexdigest()
+        key = hashlib.sha256(
+            f"{cache_namespace}|{tag}\n{system}\n{prompt}".encode("utf-8")
+        ).hexdigest()
         cache_file = CACHE / f"{key}.json"
         if cache_file.exists():
             return json.loads(cache_file.read_text(encoding="utf-8"))["text"]
@@ -58,7 +74,7 @@ def _openai_compat(name, model):
                     model=model,
                     messages=messages,
                     temperature=0,
-                    max_tokens=MAX_OUTPUT_TOKENS,
+                    max_tokens=effective_max_tokens,
                 )
                 text = resp.choices[0].message.content or ""
                 cache_file.write_text(json.dumps({"text": text}, ensure_ascii=False),
@@ -77,10 +93,14 @@ def _openai_compat(name, model):
     return ask, tag
 
 
-def get_provider(name, model=None):
+def get_provider(name, model=None, output_mode="plain", max_output_tokens=None, persona="none",
+                 shots=0, cache_namespace=None):
     """Retourne (ask, tag). Le tag identifie fournisseur, URL, modèle et limite de sortie."""
     if name == "gemini":
-        return _gemini(model)
+        return _gemini(model, output_mode=output_mode, max_output_tokens=max_output_tokens,
+                       persona=persona, shots=shots, cache_namespace=cache_namespace)
     if name in PRESETS:
-        return _openai_compat(name, model)
+        return _openai_compat(name, model, output_mode=output_mode,
+                              max_output_tokens=max_output_tokens, persona=persona, shots=shots,
+                              cache_namespace=cache_namespace)
     raise SystemExit(f"Fournisseur inconnu : {name}. Choix : gemini, {', '.join(PRESETS)}")

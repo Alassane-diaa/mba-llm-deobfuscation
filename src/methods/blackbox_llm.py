@@ -1,6 +1,10 @@
 import re
+import json
+import hashlib
+from pathlib import Path
 
-from src.expr import compile_expr
+from src.expr import compile_expr, nvars
+from src.sampling import train_inputs, to_env
 
 SYSTEM_BASE = """You are an expert in binary code deobfuscation and mixed Boolean-arithmetic (MBA) expressions.
 You receive input/output examples of an unknown function on unsigned bit-vectors.
@@ -14,18 +18,25 @@ Rules:
 - The expression must match all examples.
 - OUTPUT ONLY THE EXPRESSION ON ONE LINE, WITHOUT LABELS, QUOTES, MARKDOWN, OR EXPLANATION."""
 
-ONE_SHOT = """
+SYSTEM = SYSTEM_BASE
 
-Worked example (a different function):
-Width: 32 bits
-Variables: v0, v1
-Examples (inputs and outputs as signed decimal):
-v0=3, v1=5 -> 8
-v0=-7, v1=2 -> -5
-Expected output:
-v0 + v1"""
+JSON_OUTPUT_RULE = """
+Reply with exactly one JSON object and nothing else:
+{"reasoning": "...", "result": "..."}
+The result field must contain only the final expression."""
 
-SYSTEM = SYSTEM_BASE + ONE_SHOT
+EXPERT_PERSONA = "You are an expert reverse engineer, knowing how to deobfuscate Mixed-Boolean Arithmetic (MBA) expressions."
+
+
+def build_system(persona="none", output_mode="plain"):
+    if persona == "expert":
+        first, rest = SYSTEM_BASE.split("\n", 1)
+        system = EXPERT_PERSONA + "\n" + rest
+    else:
+        system = SYSTEM
+    if output_mode == "json":
+        system += JSON_OUTPUT_RULE
+    return system
 
 
 def signed(value, bits):
@@ -35,13 +46,41 @@ def signed(value, bits):
     return v - (1 << bits) if v >= (1 << (bits - 1)) else v
 
 
-def build_prompt(n_vars, bits, pairs):
+def demo_examples(n_vars, bits, count, excluded, demo_file="experiments/demo_functions.txt"):
+    if count <= 0:
+        return []
+    examples = []
+    excluded_normalized = {x.strip() for x in excluded}
+    for line in Path(demo_file).read_text(encoding="utf-8").splitlines():
+        expression = line.strip()
+        if not expression or expression in excluded_normalized or nvars(expression) != n_vars:
+            continue
+        f = compile_expr(expression, n_vars, bits)
+        seed = int(hashlib.sha256(f"demo|{expression}".encode("utf-8")).hexdigest()[:8], 16)
+        demo_pairs = []
+        for row in train_inputs(n_vars, bits, total=3, seed=seed):
+            demo_pairs.append((row, f(to_env(row, bits))))
+        examples.append(demo_pairs)
+        if len(examples) == count:
+            break
+    return examples
+
+
+def build_prompt(n_vars, bits, pairs, demo_pairs=None):
     lines = [f"Width: {bits} bits",
              "Variables: " + ", ".join(f"v{i}" for i in range(n_vars)),
              "Examples (inputs and outputs as signed decimal):"]
     for row, out in pairs:
         ins = ", ".join(f"v{i}={x}" for i, x in enumerate(row))
         lines.append(f"{ins} -> {signed(out, bits)}")
+    for index, examples in enumerate(demo_pairs or [], 1):
+        lines.extend(["", f"Demonstration example {index} (a different function):",
+                      f"Width: {bits} bits",
+                      "Variables: " + ", ".join(f"v{i}" for i in range(n_vars)),
+                      "Examples (inputs and outputs as signed decimal):"])
+        for row, out in examples:
+            ins = ", ".join(f"v{i}={x}" for i, x in enumerate(row))
+            lines.append(f"{ins} -> {signed(out, bits)}")
     lines.append("Expected output:")
     return "\n".join(lines)
 
@@ -77,10 +116,20 @@ def _candidates(text):
         yield line
 
 
-def parse_candidate(text, n_vars, bits):
+def parse_candidate(text, n_vars, bits, output_mode="plain"):
     """Retourne (expression, raison). La raison vaut 'ok' si une seule expression valide est trouvée."""
     if not text or not text.strip():
         return "", "réponse vide"
+    if output_mode == "json":
+        try:
+            obj = json.loads(text.strip())
+        except json.JSONDecodeError as e:
+            return "", f"JSON invalide: {e.msg}"
+        if not isinstance(obj, dict):
+            return "", "JSON invalide: la racine doit être un objet"
+        if "result" not in obj or not isinstance(obj["result"], str):
+            return "", "JSON invalide: champ 'result' manquant ou non textuel"
+        text = obj["result"]
     found = [line for line in _candidates(text) if _valid(line, n_vars, bits)]
     unique = list(dict.fromkeys(found))
     if not unique:
