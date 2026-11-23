@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import time
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from src.sampling import train_inputs, test_inputs, to_env
 from src.metrics import evaluate
 from src.providers import get_provider
 from src.methods.blackbox_methods import run_single, run_agent
+from src.methods.blackbox_llm import build_system, demo_examples
 
 
 def target_seed(target, salt):
@@ -39,6 +41,7 @@ def summary(recs, path):
     if tot_t:
         print(f"Correspondance moyenne sur les tests : {tot_c/tot_t:.1%}")
     print(f"Tours moyens : {sum(r.get('rounds', 0) for r in recs)/n:.2f}")
+    print(f"Temps moyen par expression : {sum(r.get('seconds', 0) for r in recs)/n:.2f}s")
     if ratios:
         print(f"Qualité (taille candidat / cible, sur prouvées) : {sum(ratios)/len(ratios):.2f}")
 
@@ -62,16 +65,29 @@ def main():
                     help="ne garder que les expressions à au plus N variables")
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--start", type=int, default=0)
+    ap.add_argument("--output", choices=["plain", "json"], default="plain")
+    ap.add_argument("--max-output-tokens", type=int, default=512)
+    ap.add_argument("--persona", choices=["none", "expert"], default="none")
+    ap.add_argument("--shots", type=int, default=0)
     a = ap.parse_args()
+    if a.shots < 0:
+        ap.error("--shots doit être positif ou nul")
 
-    ask, tag = get_provider(a.provider, a.model)
+    cache_namespace = uuid.uuid4().hex
+    max_output_tokens = a.max_output_tokens if a.output == "json" else None
+    ask, tag = get_provider(a.provider, a.model, output_mode=a.output,
+                            max_output_tokens=max_output_tokens, persona=a.persona,
+                            shots=a.shots, cache_namespace=cache_namespace)
+    system = build_system(persona=a.persona, output_mode=a.output)
 
     lines = [l.strip() for l in open(a.file, encoding="utf-8") if l.strip()]
     selected = [(i, l) for i, l in enumerate(lines) if nvars(l) <= a.max_vars]
     selected = selected[a.start:a.start + a.limit]
 
+    variant = f"_out-{a.output}_persona-{a.persona}_shots{a.shots}"
+    variant += f"_max{a.max_output_tokens}" if a.output == "json" else ""
     out = Path("results/raw") / (
-        f"{Path(a.file).stem}_{a.provider}_{a.method}_v{a.max_vars}_"
+        f"{Path(a.file).stem}_{a.provider}_{a.method}_v{a.max_vars}{variant}_"
         f"{time.strftime('%Y%m%d-%H%M%S')}.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -79,25 +95,41 @@ def main():
     with out.open("w", encoding="utf-8") as fh:
         for i, target in selected:
             rec = {"id": i, "target": target, "provider": tag, "method": a.method}
+            seconds = 0
             try:
                 n = nvars(target)
                 f = compile_expr(target, n, a.bits)
                 pairs = [(row, f(to_env(row, a.bits)))
                          for row in train_inputs(n, a.bits, total=a.train,
                                                  seed=target_seed(target, "train"))]
+                demos = demo_examples(n, a.bits, a.shots, set(lines))
 
                 if a.method == "single":
-                    cand, rounds, hist, reason = run_single(ask, n, a.bits, pairs)
+                    started = time.time()
+                    try:
+                        cand, rounds, hist, reason = run_single(
+                            ask, n, a.bits, pairs, system=system, output_mode=a.output,
+                            demo_pairs=demos)
+                    finally:
+                        seconds = time.time() - started
                 else:
-                    cand, rounds, hist, reason = run_agent(ask, n, a.bits, pairs, a.rounds)
+                    started = time.time()
+                    try:
+                        cand, rounds, hist, reason = run_agent(
+                            ask, n, a.bits, pairs, a.rounds,
+                            system=system, output_mode=a.output, demo_pairs=demos)
+                    finally:
+                        seconds = time.time() - started
 
                 test_rows = test_inputs(n, a.bits, seed=target_seed(target, "test"))
                 res = evaluate(cand, target, n, a.bits, test_rows, reason=reason)
-                rec.update(res, cand=cand, rounds=rounds, history=hist, reason=reason)
+                rec.update(res, cand=cand, rounds=rounds, history=hist, reason=reason,
+                           seconds=seconds)
             except Exception as e:
                 rec.update(valid=False, success=False, proven=False, correct=0, total=0,
                            ratio=None, proof=None, cand="", rounds=0, history=[],
-                           reason="exception", error=f"{type(e).__name__}: {e}")
+                           reason="exception", error=f"{type(e).__name__}: {e}",
+                           seconds=seconds)
 
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
             fh.flush()
