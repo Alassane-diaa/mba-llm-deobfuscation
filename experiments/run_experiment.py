@@ -63,7 +63,7 @@ def main():
     ap.add_argument("--bits", type=int, default=32)
     ap.add_argument("--max-vars", type=int, default=6,
                     help="ne garder que les expressions à au plus N variables")
-    ap.add_argument("--limit", type=int, default=20)
+    ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--output", choices=["plain", "json"], default="plain")
     ap.add_argument("--max-output-tokens", type=int, default=512)
@@ -82,7 +82,8 @@ def main():
 
     lines = [l.strip() for l in open(a.file, encoding="utf-8") if l.strip()]
     selected = [(i, l) for i, l in enumerate(lines) if nvars(l) <= a.max_vars]
-    selected = selected[a.start:a.start + a.limit]
+    if a.limit != None: 
+        selected = selected[a.start:a.start + a.limit]
 
     variant = f"_out-{a.output}_persona-{a.persona}_shots{a.shots}"
     variant += f"_max{a.max_output_tokens}" if a.output == "json" else ""
