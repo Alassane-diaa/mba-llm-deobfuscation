@@ -18,6 +18,12 @@ def nodes(src):
                for n in ast.walk(tree))
 
 
+def ops(src):
+    """Nombre d'opérateurs de l'AST, sans compter les variables ni les constantes."""
+    tree = ast.parse(src, mode="eval")
+    return sum(isinstance(n, (ast.BinOp, ast.UnaryOp)) for n in ast.walk(tree))
+
+
 def compile_expr(src, n_vars, bits):
     """Retourne f(env) -> entier non signé sur `bits` bits. Lève ValueError si l'expression est invalide."""
     tree = ast.parse(src.strip(), mode="eval")

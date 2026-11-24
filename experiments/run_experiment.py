@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 import uuid
+import statistics
 from collections import Counter
 from pathlib import Path
 
@@ -31,7 +32,8 @@ def summary(recs, path):
     cex = [r for r in recs if (r.get("proof") or {}).get("status") == "counterexample"]
     tot_c = sum(r.get("correct", 0) for r in recs)
     tot_t = sum(r.get("total", 0) for r in recs)
-    ratios = [r["ratio"] for r in proven if r.get("ratio") is not None]
+    quality_ops = [r["quality_ops"] for r in proven
+                   if r.get("quality_ops") is not None]
 
     print(f"\nRésultats : {path}")
     print(f"Réponses valides (parsing) : {sum(bool(r.get('valid')) for r in recs)}/{n}")
@@ -42,8 +44,13 @@ def summary(recs, path):
         print(f"Correspondance moyenne sur les tests : {tot_c/tot_t:.1%}")
     print(f"Tours moyens : {sum(r.get('rounds', 0) for r in recs)/n:.2f}")
     print(f"Temps moyen par expression : {sum(r.get('seconds', 0) for r in recs)/n:.2f}s")
-    if ratios:
-        print(f"Qualité (taille candidat / cible, sur prouvées) : {sum(ratios)/len(ratios):.2f}")
+    if quality_ops:
+        mean_quality = sum(quality_ops) / len(quality_ops)
+        median_quality = statistics.median(quality_ops)
+        print(f"Qualité opérateurs (moyenne, sur {len(quality_ops)} prouvées) : "
+              f"{mean_quality:.2f}")
+        print(f"Qualité opérateurs (médiane, sur {len(quality_ops)} prouvées) : "
+              f"{median_quality:.2f}")
 
     reasons = Counter(r.get("reason") or r.get("error") or "-" for r in recs)
     print("Raisons :")
