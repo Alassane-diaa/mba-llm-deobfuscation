@@ -4,7 +4,7 @@
 
 Installation : `pip install -r requirements.txt`, puis copier `.env.example` en `.env` et renseigner la clé du fournisseur choisi. Ollama n'a pas besoin de clé.
 
-Exemple : `python -m experiments.run_experiment third_party/xyntia/datasets/b2 --provider ollama --model codestral:22b --method single --max-vars 2 --limit 10`
+Exemple : `python -m experiments.run_experiment third_party/xyntia/datasets/b2 --provider ollama --model codestral:22b --method single --vars 2 --limit 10`
 
 Les résultats sont écrits dans `results/raw/` (un fichier JSONL par run). Les réponses des modèles sont mises en cache dans `results/cache/` : relancer la même expérience n'appelle pas le modèle.
 

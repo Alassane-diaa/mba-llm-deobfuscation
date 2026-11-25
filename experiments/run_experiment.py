@@ -1,10 +1,12 @@
 import argparse
 import hashlib
 import json
+import re
 import time
 import uuid
 import statistics
 from collections import Counter
+from collections import defaultdict
 from pathlib import Path
 
 from src.expr import nvars, compile_expr
@@ -13,6 +15,39 @@ from src.metrics import evaluate
 from src.providers import get_provider
 from src.methods.blackbox_methods import run_single, run_agent
 from src.methods.blackbox_llm import build_system, demo_examples
+
+
+def parse_vars(text):
+    if not text or not text.strip():
+        raise argparse.ArgumentTypeError("--vars ne peut pas être vide")
+
+    values = []
+    for item in text.split(","):
+        item = item.strip()
+        if not re.fullmatch(r"[+-]?\d+", item):
+            raise argparse.ArgumentTypeError(
+                f"valeur invalide dans --vars : {item!r}; entrez des entiers séparés par des virgules"
+            )
+        try:
+            value = int(item)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"valeur invalide dans --vars : {item!r}; entrez des entiers séparés par des virgules"
+            )
+        if not 1 <= value <= 6:
+            raise argparse.ArgumentTypeError(
+                f"valeur hors intervalle dans --vars : {value}; les valeurs permises vont de 1 à 6"
+            )
+        values.append(value)
+    return sorted(set(values))
+
+
+def select_targets(lines, vars_list, start=0, limit=None):
+    selected = [(i, target) for i, target in enumerate(lines)
+                if nvars(target) in vars_list]
+    if limit is None:
+        return selected[start:]
+    return selected[start:start + limit]
 
 
 def target_seed(target, salt):
@@ -57,6 +92,41 @@ def summary(recs, path):
     for reason, count in reasons.most_common():
         print(f"  {count:3d}  {reason}")
 
+    grouped = defaultdict(list)
+    for rec in recs:
+        grouped[nvars(rec["target"])].append(rec)
+
+    headers = ("n", "expressions", "valides", "réussites échantillons",
+               "prouvées Z3", "qualité moyenne", "qualité médiane", "temps moyen (s)")
+    rows = []
+    for var_count in sorted(grouped):
+        group = grouped[var_count]
+        proven_group = [rec for rec in group if rec.get("proven")]
+        qualities = [rec["quality_ops"] for rec in proven_group
+                     if rec.get("quality_ops") is not None]
+        rows.append((
+            str(var_count),
+            str(len(group)),
+            str(sum(bool(rec.get("valid")) for rec in group)),
+            str(sum(bool(rec.get("success")) for rec in group)),
+            str(len(proven_group)),
+            f"{sum(qualities) / len(qualities):.2f}" if qualities else "n/a",
+            f"{statistics.median(qualities):.2f}" if qualities else "n/a",
+            f"{sum(rec.get('seconds', 0) for rec in group) / len(group):.2f}",
+        ))
+
+    widths = [max(len(header), *(len(row[i]) for row in rows))
+              for i, header in enumerate(headers)]
+
+    def format_row(row):
+        return "  ".join(value.ljust(width) for value, width in zip(row, widths))
+
+    print("\nRésumé par nombre de variables")
+    print(format_row(headers))
+    print(format_row(tuple("-" * width for width in widths)))
+    for row in rows:
+        print(format_row(row))
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -68,8 +138,8 @@ def main():
     ap.add_argument("--rounds", type=int, default=3, help="tours max pour agent")
     ap.add_argument("--train", type=int, default=100, help="exemples visibles par le LLM")
     ap.add_argument("--bits", type=int, default=32)
-    ap.add_argument("--max-vars", type=int, default=6,
-                    help="ne garder que les expressions à au plus N variables")
+    ap.add_argument("--vars", type=parse_vars, default=parse_vars("2,3,4,5,6"),
+                    help="liste de nombres exacts de variables séparés par des virgules (1 à 6)")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--output", choices=["plain", "json"], default="plain")
@@ -88,14 +158,11 @@ def main():
     system = build_system(persona=a.persona, output_mode=a.output)
 
     lines = [l.strip() for l in open(a.file, encoding="utf-8") if l.strip()]
-    selected = [(i, l) for i, l in enumerate(lines) if nvars(l) <= a.max_vars]
-    if a.limit != None: 
-        selected = selected[a.start:a.start + a.limit]
+    selected = select_targets(lines, a.vars, start=a.start, limit=a.limit)
 
-    variant = f"_out-{a.output}_persona-{a.persona}_shots{a.shots}"
-    variant += f"_max{a.max_output_tokens}" if a.output == "json" else ""
     out = Path("results/raw") / (
-        f"{Path(a.file).stem}_{a.provider}_{a.method}_v{a.max_vars}{variant}_"
+        f"{Path(a.file).stem}_{a.provider}_{a.method}_vars"
+        f"{'-'.join(str(value) for value in a.vars)}_"
         f"{time.strftime('%Y%m%d-%H%M%S')}.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
 
