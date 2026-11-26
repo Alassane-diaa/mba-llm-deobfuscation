@@ -14,7 +14,12 @@ from src.sampling import train_inputs, test_inputs, to_env
 from src.metrics import evaluate
 from src.providers import get_provider
 from src.methods.blackbox_methods import run_single, run_agent
-from src.methods.blackbox_llm import build_system, demo_examples
+from src.methods.blackbox_llm import (
+    build_system,
+    demo_examples,
+    load_demo_functions,
+    select_demo_functions,
+)
 
 
 def parse_vars(text):
@@ -158,6 +163,9 @@ def main():
 
     lines = [l.strip() for l in open(a.file, encoding="utf-8") if l.strip()]
     selected = select_targets(lines, a.vars, start=a.start, limit=a.limit)
+    demo_functions = []
+    if a.shots:
+        demo_functions = load_demo_functions()
 
     out = Path("results/raw") / (
         f"{Path(a.file).stem}_{a.provider}_{a.method}_vars"
@@ -176,7 +184,10 @@ def main():
                 pairs = [(row, f(to_env(row, a.bits)))
                          for row in train_inputs(n, a.bits, total=a.train,
                                                  seed=target_seed(target, "train"))]
-                demos = demo_examples(n, a.bits, a.shots, set(lines))
+                demo_functions = select_demo_functions(
+                    demo_functions, n, a.shots, target)
+                demos = demo_examples(demo_functions, n, a.bits)
+                rec["demo_functions"] = demo_functions
 
                 if a.method == "single":
                     started = time.time()

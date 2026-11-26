@@ -1,9 +1,11 @@
 import re
 import json
 import hashlib
+import random
 from pathlib import Path
 
 from src.expr import compile_expr, nvars
+from src.prove import prove
 from src.sampling import train_inputs, to_env
 
 SYSTEM_BASE = """You are an expert in binary code deobfuscation and mixed Boolean-arithmetic (MBA) expressions.
@@ -39,23 +41,89 @@ def signed(value, bits):
     return v - (1 << bits) if v >= (1 << (bits - 1)) else v
 
 
-def demo_examples(n_vars, bits, count, excluded, demo_file="experiments/demo_functions.txt"):
-    if count <= 0:
-        return []
-    examples = []
-    excluded_normalized = {x.strip() for x in excluded}
-    for line in Path(demo_file).read_text(encoding="utf-8").splitlines():
-        expression = line.strip()
-        if not expression or expression in excluded_normalized or nvars(expression) != n_vars:
+def load_demo_functions(demo_file="experiments/demo_functions.txt"):
+    expressions = (
+        line.strip()
+        for line in Path(demo_file).read_text(encoding="utf-8").splitlines()
+    )
+    return list(dict.fromkeys(expression for expression in expressions if expression))
+
+
+def validate_demo_functions(targets, bits, demo_file="experiments/demo_functions.txt"):
+    targets_by_vars = {}
+    for target in dict.fromkeys(targets):
+        n_vars = nvars(target)
+        try:
+            target_fn = compile_expr(target, n_vars, bits)
+        except Exception as exc:
+            raise ValueError(
+                f"cannot validate demos against target {target!r}: {exc}"
+            ) from exc
+        targets_by_vars.setdefault(n_vars, []).append((target, target_fn))
+
+    demo_functions = []
+    rejected = []
+    validation_envs = {}
+
+    for expression in load_demo_functions(demo_file):
+        n_vars = nvars(expression)
+        try:
+            demo_fn = compile_expr(expression, n_vars, bits)
+        except Exception as exc:
+            rejected.append((expression, f"invalid demo expression: {exc}"))
             continue
+
+        if n_vars not in validation_envs:
+            seed = int(hashlib.sha256(
+                f"demo-validation|{bits}|{n_vars}".encode("utf-8")
+            ).hexdigest()[:8], 16)
+            rng = random.Random(seed)
+            lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+            rows = [[rng.randint(lo, hi) for _ in range(n_vars)] for _ in range(32)]
+            validation_envs[n_vars] = [to_env(row, bits) for row in rows]
+
+        unsafe_reason = None
+        envs = validation_envs[n_vars]
+        for target, target_fn in targets_by_vars.get(n_vars, []):
+            if any(demo_fn(env) != target_fn(env) for env in envs):
+                continue
+
+            proof = prove(expression, target, n_vars, bits, timeout_ms=2000)
+            if proof["status"] == "proven":
+                unsafe_reason = f"equivalent to target {target!r}"
+                break
+            if proof["status"] in ("timeout", "error"):
+                unsafe_reason = (
+                    f"could not establish distinction from {target!r}: "
+                    f"{proof['status']} ({proof.get('reason', 'no details')})"
+                )
+                break
+
+        if unsafe_reason:
+            rejected.append((expression, unsafe_reason))
+        else:
+            demo_functions.append(expression)
+
+    return demo_functions, rejected
+
+
+def select_demo_functions(demo_functions, n_vars, count, target):
+    eligible = [expression for expression in demo_functions if nvars(expression) == n_vars]
+    eligible.sort(key=lambda expression: hashlib.sha256(
+        f"{target}|{expression}".encode("utf-8")
+    ).digest())
+    return eligible[:count]
+
+
+def demo_examples(expressions, n_vars, bits):
+    examples = []
+    for expression in expressions:
         f = compile_expr(expression, n_vars, bits)
         seed = int(hashlib.sha256(f"demo|{expression}".encode("utf-8")).hexdigest()[:8], 16)
         demo_pairs = []
         for row in train_inputs(n_vars, bits, total=3, seed=seed):
             demo_pairs.append((row, f(to_env(row, bits))))
         examples.append(demo_pairs)
-        if len(examples) == count:
-            break
     return examples
 
 
