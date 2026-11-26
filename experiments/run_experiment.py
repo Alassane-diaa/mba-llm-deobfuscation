@@ -144,7 +144,6 @@ def main():
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--output", choices=["plain", "json"], default="plain")
     ap.add_argument("--max-output-tokens", type=int, default=512)
-    ap.add_argument("--persona", choices=["none", "expert"], default="none")
     ap.add_argument("--shots", type=int, default=0)
     a = ap.parse_args()
     if a.shots < 0:
@@ -153,9 +152,9 @@ def main():
     cache_namespace = uuid.uuid4().hex
     max_output_tokens = a.max_output_tokens if a.output == "json" else None
     ask, tag = get_provider(a.provider, a.model, output_mode=a.output,
-                            max_output_tokens=max_output_tokens, persona=a.persona,
+                            max_output_tokens=max_output_tokens,
                             shots=a.shots, cache_namespace=cache_namespace)
-    system = build_system(persona=a.persona, output_mode=a.output)
+    system = build_system(output_mode=a.output)
 
     lines = [l.strip() for l in open(a.file, encoding="utf-8") if l.strip()]
     selected = select_targets(lines, a.vars, start=a.start, limit=a.limit)

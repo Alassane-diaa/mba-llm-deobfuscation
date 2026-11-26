@@ -25,15 +25,8 @@ Reply with exactly one JSON object and nothing else:
 {"reasoning": "...", "result": "..."}
 The result field must contain only the final expression."""
 
-EXPERT_PERSONA = "You are an expert reverse engineer, knowing how to deobfuscate Mixed-Boolean Arithmetic (MBA) expressions."
-
-
-def build_system(persona="none", output_mode="plain"):
-    if persona == "expert":
-        first, rest = SYSTEM_BASE.split("\n", 1)
-        system = EXPERT_PERSONA + "\n" + rest
-    else:
-        system = SYSTEM
+def build_system(output_mode="plain"):
+    system = SYSTEM
     if output_mode == "json":
         system += JSON_OUTPUT_RULE
     return system
